@@ -21,11 +21,13 @@ const {
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const zlib = require('zlib'); // Added for session decompression
+const zlib = require('zlib');
 const express = require('express');
 const P = require('pino');
 const { handleMessages } = require('./handler');
 const config = require('./config.js');
+
+// ✅ FIX: Create store AFTER destructuring makeInMemoryStore
 const store = makeInMemoryStore({ logger: P({ level: 'silent' }) });
 
 const prefix = config.PREFIX || '.';
@@ -274,7 +276,6 @@ _⚡ Powered by Silva Tech Inc._
         logMessage('SUCCESS', 'Modern welcome message sent to owner.');
     } catch (e) {
         logMessage('WARN', `Welcome message failed: ${e.message}`);
-        // Fallback: try sending without the complex ad reply
         try {
             await sock.sendMessage(sock.user.id, { text: `✅ ${config.BOT_NAME} is now online!\nPrefix: ${prefix}` });
         } catch (fallbackErr) {
@@ -296,10 +297,8 @@ async function updateProfileStatus(sock) {
 
 // ✅ Connect to WhatsApp (main)
 async function connectToWhatsApp() {
-    // Load session from compressed base64
     await loadSession();
     
-    // Use the session directory for multi-file auth state
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
     const { version } = await fetchLatestBaileysVersion();
 
@@ -325,14 +324,12 @@ async function connectToWhatsApp() {
         ...cryptoOptions
     });
 
-    // bind the store so store.loadMessage works
     try {
         store.bind(sock.ev);
     } catch (e) {
         logMessage('WARN', `store.bind failed: ${e.message}`);
     }
 
-    // keep handler's setup in place if your handler requires connection hooks
     try {
         const { setupConnectionHandlers } = require('./handler');
         if (typeof setupConnectionHandlers === 'function') setupConnectionHandlers(sock);
@@ -340,7 +337,6 @@ async function connectToWhatsApp() {
         logMessage('DEBUG', 'No setupConnectionHandlers exported from handler (ok).');
     }
 
-    // connection update
     sock.ev.on('connection.update', async update => {
         const { connection, lastDisconnect } = update;
         if (connection === 'close') {
@@ -352,14 +348,11 @@ async function connectToWhatsApp() {
         } else if (connection === 'open') {
             logMessage('SUCCESS', '✅ Connected to WhatsApp');
 
-            // store bot jid for mention detection
             global.botJid = sock.user.id;
 
-            // Update profile & send welcome
             await updateProfileStatus(sock);
             await sendWelcomeMessage(sock);
 
-            // ✅ Follow configured newsletter IDs (if available)
             const newsletterIds = config.NEWSLETTER_IDS || [
                 '120363276154401733@newsletter',
                 '120363200367779016@newsletter',
@@ -383,7 +376,6 @@ async function connectToWhatsApp() {
 
     sock.ev.on('creds.update', saveCreds);
 
-    // ✅ Cache messages for anti-delete
     sock.ev.on('messages.upsert', ({ messages }) => {
         if (!Array.isArray(messages)) return;
         
@@ -397,16 +389,14 @@ async function connectToWhatsApp() {
             });
         }
         
-        // Clean old cache entries (older than 1 hour)
         const now = Date.now();
         for (const [key, value] of messageCache.entries()) {
-            if (now - value.timestamp > 60 * 60 * 1000) { // 1 hour
+            if (now - value.timestamp > 60 * 60 * 1000) {
                 messageCache.delete(key);
             }
         }
     });
 
-    // ✅ Anti-delete handler (messages.update)
     sock.ev.on("messages.update", async (updates) => {
         for (const { key, update } of updates) {
             if (key.remoteJid === "status@broadcast") continue;
@@ -445,7 +435,6 @@ async function connectToWhatsApp() {
         }
     });
 
-    // Anti-delete handler (messages.delete - existing)
     sock.ev.on('messages.delete', async (item) => {
         try {
             logMessage('DEBUG', 'messages.delete triggered');
@@ -514,7 +503,6 @@ async function connectToWhatsApp() {
         }
     });
 
-    // Status saver dir
     const statusSaverDir = path.join(__dirname, 'status_saver');
     if (!fs.existsSync(statusSaverDir)) fs.mkdirSync(statusSaverDir, { recursive: true });
 
@@ -561,19 +549,16 @@ async function connectToWhatsApp() {
         return { inner, msgType };
     }
 
-    // === ONE consolidated messages.upsert handler for statuses, newsletters and commands ===
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
         try {
             if (!Array.isArray(messages) || messages.length === 0) return;
 
-            // ✅ FIX 1: Correct event filtering - process only real-time messages
             if (type && !['notify', 'append'].includes(type)) {
                 logMessage('DEBUG', `Skipping message type: ${type}`);
                 return;
             }
 
             for (const m of messages) {
-                // ---- STATUS handling (status@broadcast)
                 if (m.key.remoteJid === 'status@broadcast') {
                     try {
                         const statusId = m.key.id;
@@ -665,11 +650,9 @@ async function connectToWhatsApp() {
                         logMessage('ERROR', `Status handler error: ${e.message}`);
                     }
 
-                    // continue to next message in the upsert array
                     continue;
                 }
 
-                // ---- For other messages: newsletter / broadcast / group / private commands
                 if (!m.message) continue;
 
                 const sender = m.key.remoteJid;
@@ -679,10 +662,8 @@ async function connectToWhatsApp() {
 
                 logMessage('MESSAGE', `New ${isNewsletter ? 'newsletter' : isGroupMsg ? 'group' : isBroadcast ? 'broadcast' : 'private'} message from ${sender}`);
 
-                // --- Auto-react to newsletters / channels
                 if (isNewsletter && config.AUTO_REACT_NEWSLETTER) {
                     try {
-                        // pick a random emoji for variety
                         const emojis = ['🤖','🔥','💫','❤️','👍','💯','✨','👏','😎'];
                         const randomEmoji = emojis[Math.floor(Math.random() * emojis.length)];
                         await sock.sendMessage(m.key.remoteJid, {
@@ -694,14 +675,11 @@ async function connectToWhatsApp() {
                     }
                 }
 
-                // ✅ FIX 2: Simplified group command handling
-                // Allow commands in groups only if GROUP_COMMANDS config is enabled
                 if (isGroupMsg && config.GROUP_COMMANDS !== true) {
                     logMessage('DEBUG', 'Group commands disabled in config, skipping message.');
                     continue;
                 }
 
-                // Extract text content for command parsing
                 const messageType = Object.keys(m.message)[0];
                 let content = '';
                 let isMentioned = false;
@@ -718,13 +696,11 @@ async function connectToWhatsApp() {
                 } else if (messageType === 'documentMessage') {
                     content = m.message.documentMessage.caption || '';
                 } else {
-                    // other types not supported for commands
                     continue;
                 }
 
                 logMessage('DEBUG', `Message content: ${content.substring(0, 100)}`);
 
-                // determine if message is for the bot (prefix or mention in groups)
                 let isForBot = false;
                 if (isGroupMsg) {
                     isForBot = content.startsWith(prefix) || isMentioned;
@@ -737,13 +713,11 @@ async function connectToWhatsApp() {
                     continue;
                 }
 
-                // remove mention text if present
                 if (isMentioned) {
                     const botNumber = (global.botJid || '').split('@')[0];
                     content = content.replace(new RegExp(`@${botNumber}\\s*`, 'i'), '').trim();
                 }
 
-                // extract command and args
                 const commandText = content.startsWith(prefix) ? content.slice(prefix.length).trim() : content.trim();
                 const [cmd, ...args] = commandText.split(/\s+/);
                 const command = (cmd || '').toLowerCase();
@@ -754,7 +728,6 @@ async function connectToWhatsApp() {
                     try { await sock.readMessages([m.key]); } catch (e) { /* ignore */ }
                 }
 
-                // CORE commands
                 if (command === 'ping') {
                     const latency = m.messageTimestamp ? new Date().getTime() - m.messageTimestamp * 1000 : 0;
                     await sock.sendMessage(sender, {
@@ -827,24 +800,20 @@ async function connectToWhatsApp() {
                     continue;
                 }
 
-                // Plugin Commands
                 let pluginFound = false;
                 for (const plugin of plugins.values()) {
                     if (plugin.commands && plugin.commands.includes(command)) {
                         pluginFound = true;
                         try {
                             logMessage('PLUGIN', `Executing plugin: ${plugin.commands}`);
-                            // plugin.handler signature preserved: ({ sock, m, sender, args, contextInfo, isGroup })
                             await plugin.handler({ sock, m, sender, args, contextInfo: globalContextInfo, isGroup: isGroupMsg });
                             logMessage('SUCCESS', `Plugin executed: ${plugin.commands}`);
                         } catch (err) {
-                            // ✅ FIX 3: Enhanced error logging
                             logMessage('ERROR', `❌ Plugin "${plugin.commands}" failed for command "${command}"`);
                             logMessage('ERROR', `   Error: ${err.message}`);
                             logMessage('ERROR', `   Stack: ${err.stack || 'No stack trace'}`);
                             logMessage('DEBUG', `   Sender: ${sender}, Args: ${args}`);
 
-                            // Optionally notify the user
                             try {
                                 await sock.sendMessage(sender, {
                                     text: `❌ Command "${command}" failed. Check bot logs for details.`
@@ -869,7 +838,6 @@ async function connectToWhatsApp() {
     return sock;
 }
 
-// ✅ Express Web API
 const app = express();
 app.use(express.static(path.join(__dirname, 'smm')));
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'smm', 'silva.html')));
@@ -880,7 +848,6 @@ app.listen(port, () => {
     logMessage('INFO', `📊 Dashboard available at http://localhost:${port}`);
 });
 
-// ✅ Error handling
 process.on('uncaughtException', (err) => {
     logMessage('CRITICAL', `Uncaught Exception: ${err.stack || err.message}`);
     setTimeout(() => connectToWhatsApp(), 5000);
@@ -889,7 +856,6 @@ process.on('unhandledRejection', (reason, promise) => {
     logMessage('CRITICAL', `Unhandled Rejection: ${reason} at ${promise}`);
 });
 
-// ✅ Boot Bot
 (async () => {
     try {
         logMessage('INFO', 'Booting Silva MD Bot...');
