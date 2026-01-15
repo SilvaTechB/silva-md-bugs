@@ -14,11 +14,9 @@ const {
     isJidBroadcast,
     isJidStatusBroadcast,
     areJidsSameUser,
-    downloadContentFromMessage
+    downloadContentFromMessage,
+    makeInMemoryStore
 } = baileys;
-
-// Import store separately
-const { makeInMemoryStore } = require('@whiskeysockets/baileys/lib/Store');
 
 const fs = require('fs');
 const path = require('path');
