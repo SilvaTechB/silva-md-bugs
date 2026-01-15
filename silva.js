@@ -14,9 +14,11 @@ const {
     isJidBroadcast,
     isJidStatusBroadcast,
     areJidsSameUser,
-    makeInMemoryStore,
     downloadContentFromMessage
 } = baileys;
+
+// Import store separately
+const { makeInMemoryStore } = require('@whiskeysockets/baileys/lib/Store');
 
 const fs = require('fs');
 const path = require('path');
@@ -27,7 +29,7 @@ const P = require('pino');
 const { handleMessages } = require('./handler');
 const config = require('./config.js');
 
-// ✅ FIX: Create store AFTER destructuring makeInMemoryStore
+// ✅ FIXED: Create store correctly
 const store = makeInMemoryStore({ logger: P({ level: 'silent' }) });
 
 const prefix = config.PREFIX || '.';
